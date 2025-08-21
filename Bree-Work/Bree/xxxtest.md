@@ -1,6 +1,6 @@
 
 
-![](image/test.png)
+![](Image/test.png)
 
 
 
