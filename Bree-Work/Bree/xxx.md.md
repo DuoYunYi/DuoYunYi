@@ -1,4 +1,14 @@
-![](Pasted image 20250811172546.png)
+
+
+
+
+![](test.png)
+
+
+
+![[test.png]]
+
+>>>>>>> 5611abc (image)
 
 
 
