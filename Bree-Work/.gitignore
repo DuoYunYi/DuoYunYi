@@ -1,0 +1,6 @@
+# Obsidian 忽略规则
+.obsidian/
+.trash-*/
+*.session
+.DS_Store
+thumbs.db
