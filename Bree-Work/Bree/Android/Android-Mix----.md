@@ -94,3 +94,6 @@ processPendingInstall
                         installPackageTracedLI(args, res);
                     }
 ```
+
+# 五、将app设置成系统应用
+

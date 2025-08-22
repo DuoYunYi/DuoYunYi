@@ -150,7 +150,7 @@ ip addr add 192.168.1.100/24 dev eth0
 ip link set eth0 up
 ```
 
-### （6）修改pid默认路径
+### （6）修改 pid 默认路径
 
 aml_sdk/external/dnsmasq/src/config.h
 
@@ -158,8 +158,111 @@ aml_sdk/external/dnsmasq/src/config.h
 #define RUNFILE "/data/local/tmp/dnsmasq.pid"
 ```
 
+### （7）检查Android是否支持dnsmasq
 
-# 二、Dnsmasq与wifi热点共享区别
+```
+adb shell ls /system/bin/dnsmasq
+```
+
+# 二、使用接口设置 eth0 IP
+
+## 1.setConfiguration接口设置
+
+```
+public void setEthernetAddr(String iface, String ipAddr, int prefixLength) {
+        try{
+            // 1. 创建 StaticIpConfiguration 对象并配置
+            StaticIpConfiguration staticIpConfig = new StaticIpConfiguration();
+            // 设置IP地址和子网掩码 (e.g., 192.168.1.100/24)
+            staticIpConfig.ipAddress = new LinkAddress(InetAddress.getByName(ipAddr), prefixLength);
+
+            // 同样替换其他行：
+            staticIpConfig.gateway = InetAddress.getByName(ipAddr);
+            staticIpConfig.dnsServers.add(InetAddress.getByName("8.8.8.8"));
+            staticIpConfig.dnsServers.add(InetAddress.getByName("8.8.4.4"));
+
+            // 2. 创建 IpConfiguration 对象 (Android 9方式)
+            IpConfiguration ipConfig = new IpConfiguration();
+            // 使用setter方法进行配置
+            ipConfig.setStaticIpConfiguration(staticIpConfig);
+            // 如果需要DHCP，则使用：
+            // ipConfig.setIpAssignment(IpAssignment.DHCP);
+            
+            ipConfig.setIpAssignment(IpAssignment.STATIC); 
+            ipConfig.setProxySettings(IpConfiguration.ProxySettings.NONE); // 设置为无代理
+
+            // 额外设置 IP 分配方式（关键修复！）
+            // 使用反射设置 ipAssignment，因为某些版本没有公开的setter
+            // Field ipAssignmentField = IpConfiguration.class.getDeclaredField("ipAssignment");
+            // ipAssignmentField.setAccessible(true);
+            // ipAssignmentField.set(ipConfig, IpAssignment.STATIC);
+            // Log.d(TAG, "Set ipAssignment to STATIC via reflection");
+
+            if (ethernetService != null) {
+                //ethernetService.setConfiguration("eth0", ipConfig);
+                ethernetService.setConfiguration(iface, ipConfig);
+                Log.d(TAG, "Successfully set static IP configuration for eth0");
+            } else {
+                Log.d(TAG, "ethernetService is null");
+            }
+        } catch (UnknownHostException e) {
+            e.printStackTrace();
+        } catch (SecurityException e) {
+            Log.e(TAG, "SecurityException: " + e.getMessage(), e);
+        } catch (RemoteException e) {
+            Log.e(TAG, "RemoteException: " + e.getMessage(), e);
+        } catch (Exception e) {
+            Log.e(TAG, "Unexpected exception: " + e.getMessage(), e);
+        }
+    }
+```
+
+ethernetService.setConfiguration(iface, ipConfig);单独使用接口设置时设置IP失败，
+接口设置时提示：**EthernetTracker: updateIpConfiguration, iface: eth0, cfg: IP assignment: UNASSIGNED**
+
+需要将IP assignment设置成static：**ipConfig.setIpAssignment(IpAssignment.STATIC)**; 
+
+若ipConfig.setIpAssignment(IpAssignment.STATIC); 接口无法使用，可以使用反射调用：
+```
+            // 额外设置 IP 分配方式（关键修复！）
+            // 使用反射设置 ipAssignment，因为某些版本没有公开的setter
+            // Field ipAssignmentField = IpConfiguration.class.getDeclaredField("ipAssignment");
+            // ipAssignmentField.setAccessible(true);
+            // ipAssignmentField.set(ipConfig, IpAssignment.STATIC);
+            // Log.d(TAG, "Set ipAssignment to STATIC via reflection");
+```
+
+## 2.app权限问题（先确定是否有权限问题）
+
+aml_sdk/frameworks/opt/net/ethernet/java/com/android/server/ethernet/EthernetServiceImpl.java
+```
+/**
+     * Set Ethernet configuration
+     */
+    @Override
+    public void setConfiguration(String iface, IpConfiguration config) {
+        if (!mStarted.get()) {
+            Log.w(TAG, "System isn't ready enough to change ethernet configuration");
+        }
+
+        enforceConnectivityInternalPermission();
+
+        if (mTracker.isRestrictedInterface(iface)) {
+            enforceUseRestrictedNetworksPermission();
+        }
+
+        // TODO: this does not check proxy settings, gateways, etc.
+        // Fix this by making IpConfiguration a complete representation of static configuration.
+        mTracker.updateIpConfiguration(iface, new IpConfiguration(config));
+    }
+```
+
+**enforceConnectivityInternalPermission** 对权限进行检查，
+需要**android.permission.CONNECTIVITY_INTERNAL** 权限，但是普通应用无法获得
+
+调试：将enforceConnectivityInternalPermission注释掉后功能正常
+正式：需要将app设置为系统应用
+# 三、Dnsmasq与wifi热点共享区别
 
 - **dnsmasq (独立 DHCP 模式)**
     - 是一个轻量级的 DHCP 和 DNS 服务器工具，专注于提供 **IP 分配（DHCP）** 和 **域名解析（DNS）** 功能。
@@ -183,7 +286,7 @@ aml_sdk/external/dnsmasq/src/config.h
 - 需共享互联网 → Wi-Fi 热点（本质是 `dnsmasq` + NAT 的组合方案）。
 
 
-# 三、Dnsmasq详解
+# 四、Dnsmasq详解
 
 `dnsmasq` 是一个轻量级、易于配置的，提供 **DNS 缓存**、**DHCP 服务**、**TFTP 服务** 和 **路由器广告（Router Advertisement）** 功能的软件。
 
@@ -296,9 +399,6 @@ DHCP 采用 **DORA（Discover-Offer-Request-Acknowledge）** 四个步骤完成 
 
 
 
-**检查 `dnsmasq` 是否存在**
-
-adb shell ls /system/bin/dnsmasq
 
 
 **Settings中有线网开关UI提交**
@@ -307,13 +407,5 @@ http://git.fjdynamics.com/fjst_linux/amlogic/android-p-20211030/commit/ab1b8c23e
 ```
 
 
-**是否需要修改设备树配置（BoardConfig.mk）**
-
-在 `device/<vendor>/<device>/BoardConfig.mk` 中添加：
-
-启用以太网和 DHCP 功能：
-
-BOARD_HAS_ETHERNET := true
-BOARD_ETHERNET_USE_DNSMASQ := true
 
 
